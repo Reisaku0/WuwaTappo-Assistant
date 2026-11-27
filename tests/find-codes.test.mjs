@@ -15,7 +15,8 @@ const post = [
 ];
 
 test('官方帖子里的兑换码和到期时间都能读出来', () => {
-  const text = textOf(post);
+  // TapTap 帖子详情里正文就是这样包着的
+  const text = textOf({ json: post });
   assert.ok(mentionsPet(text));
   assert.deepEqual(extractCodes(text, TITLE), { codes: [{ code: 'RareTappo', expires: '2026-11-13T11:00:00+08:00' }], problems: [] });
 });

@@ -25,6 +25,8 @@ export function textOf(node) {
   if (typeof node === 'string') return node;
   if (Array.isArray(node)) return node.map(textOf).join('');
   if (typeof node === 'object') {
+    // TapTap 的正文是 { json: [段落…] }
+    if (Array.isArray(node.json)) return textOf(node.json);
     const own = typeof node.text === 'string' ? node.text : '';
     const inner = node.children ? textOf(node.children) : '';
     return own + inner + (node.type === 'paragraph' ? '\n' : '');
