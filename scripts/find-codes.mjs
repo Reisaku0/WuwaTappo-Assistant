@@ -17,7 +17,7 @@ const KEEP_EXPIRED_DAYS = 30;
 const PET = /Wuwa\s*Tappo|鸣潮桌宠|桌宠软件|桌宠/i;
 const GAME = /游戏本体|游戏内|鸣潮游戏|《鸣潮》游戏|客户端内|游戏兑换/;
 const CODE_LINE = /兑换码\s*[:：]\s*([A-Za-z0-9_-]{3,32})(?![A-Za-z0-9_-])/g;
-const VALIDITY = /有效期|截止|截至|到期/;
+const VALIDITY = /有效期|截止|截至|到期|可兑换至|兑换至/;
 
 /** 富文本里的所有文字，每段一行。 */
 export function textOf(node) {
@@ -40,6 +40,8 @@ export function mentionsPet(text) { return PET.test(text); }
 export function parseUntil(line) {
   if (!VALIDITY.test(line) && !/至\s*\d{4}/.test(line)) return undefined;
   if (/永久|长期有效|不限时/.test(line)) return undefined;
+  // 只写了月日、没写年份的，算读不懂，先不收
+  if (/至\s*\d{1,2}\s*月\s*\d{1,2}\s*日/.test(line) && !/\d{4}\s*年\s*\d{1,2}\s*月/.test(line)) return null;
   const m = line.match(/(?:至|截止|截至|到)\s*(?:到)?\s*(\d{4})\s*(?:年|[.\-/])\s*(\d{1,2})\s*(?:月|[.\-/])\s*(\d{1,2})\s*日?(?:\s*(\d{1,2})\s*[:：时]\s*(\d{2})?)?/);
   if (!m) return null;
   const [, y, mo, d, h, mi] = m;
@@ -47,35 +49,48 @@ export function parseUntil(line) {
   return Number.isNaN(new Date(iso).getTime()) ? null : iso;
 }
 
+// 帖子里分段的小标题：【…】、[…]、一、二、…
+const HEADER = /^\s*[【\[［][^】\]］]{1,40}[】\]］]\s*$|^\s*[一二三四五六七八九十]{1,3}\s*[、.．]/;
+
 /**
- * 帖子里属于桌宠的兑换码。每个码看它所在的「一段」：码所在行往前 4 行到下一个兑换码之前。
- * 这一段提到桌宠、或者帖子标题就是桌宠且这一段没说是游戏本体的，才算桌宠的码。
- * 有效期只认这一段里的；整帖只有一个码时，也认帖子里唯一的一条有效期。
- * 返回 { codes: [{ code, expires }], problems: [文字] }。
+ * 帖子里属于桌宠的兑换码。帖子标题算作开头那一段，正文按小标题分段，每个码只看自己那一段：
+ * - 码那一行写了桌宠就是桌宠的，写了游戏本体就不是；
+ * - 否则看这一段：只提到桌宠的算；只提到游戏本体的不算；两个都提到的看不准，先不收；
+ *   这一段什么都没提时，帖子标题是桌宠的才算；
+ * - 有效期只认这一段里的：没有就长期有效；只有一条就是这一段所有码的；多于一条或读不懂的先不收。
+ * 返回 { codes: [{ code, expires }], problems: [文字] }，problems 里是先不收的码和原因。
  */
 export function extractCodes(text, title = '') {
-  const lines = text.split('\n');
-  const hits = [];
-  lines.forEach((line, index) => { for (const m of line.matchAll(CODE_LINE)) hits.push({ code: m[1], index }); });
-  const titlePet = mentionsPet(title);
-  const allUntil = lines.map(parseUntil).filter(value => value !== undefined);
-  const codes = [], problems = [];
-  hits.forEach((hit, n) => {
-    if (codes.some(item => item.code === hit.code)) return;
-    const end = n + 1 < hits.length ? hits[n + 1].index : Math.min(lines.length, hit.index + 8);
-    const block = lines.slice(Math.max(0, hit.index - 4), Math.max(end, hit.index + 1));
-    const own = lines.slice(hit.index, Math.max(end, hit.index + 1));
-    const blockText = block.join('\n');
-    const forPet = mentionsPet(lines[hit.index]) || (!GAME.test(lines[hit.index]) && (mentionsPet(blockText) || titlePet) && !GAME.test(own.join('\n')));
-    if (!forPet) return;
-    let expires = null;
-    const ownUntil = own.map(parseUntil).filter(value => value !== undefined);
-    if (ownUntil.length) expires = ownUntil[0];
-    else if (hits.length === 1 && allUntil.length === 1) expires = allUntil[0];
-    else if (hits.length > 1 && allUntil.length) { problems.push(`${hit.code}：帖子里有多个码和有效期，但看不出这个码的有效期`); return; }
-    if (expires === null && (ownUntil.length || (hits.length === 1 && allUntil.length === 1))) { problems.push(`${hit.code}：有效期的写法读不懂`); return; }
-    codes.push({ code: hit.code, expires });
+  const lines = [title, ...text.split('\n')];
+  const blocks = [];
+  let current = [];
+  lines.forEach((line, index) => {
+    if (index > 0 && HEADER.test(line) && current.length) { blocks.push(current); current = []; }
+    current.push(line);
   });
+  if (current.length) blocks.push(current);
+  const titlePet = mentionsPet(title);
+  const codes = [], problems = [];
+  for (const block of blocks) {
+    const blockText = block.join('\n');
+    const hits = [];
+    block.forEach(line => { for (const m of line.matchAll(CODE_LINE)) if (!hits.some(hit => hit.code === m[1])) hits.push({ code: m[1], line }); });
+    if (!hits.length) continue;
+    const until = block.map(parseUntil).filter(value => value !== undefined);
+    for (const hit of hits) {
+      if (codes.some(item => item.code === hit.code)) continue;
+      let forPet;
+      if (mentionsPet(hit.line) && !GAME.test(hit.line)) forPet = true;
+      else if (GAME.test(hit.line)) forPet = false;
+      else if (mentionsPet(blockText) && GAME.test(blockText)) { problems.push(`${hit.code}：这一段同时提到桌宠和游戏本体，看不出是哪边的码`); continue; }
+      else if (GAME.test(blockText)) forPet = false;
+      else forPet = mentionsPet(blockText) || titlePet;
+      if (!forPet) continue;
+      if (until.includes(null)) { problems.push(`${hit.code}：有效期的写法读不懂`); continue; }
+      if (until.length > 1) { problems.push(`${hit.code}：这一段有多条有效期，看不出这个码是哪一条`); continue; }
+      codes.push({ code: hit.code, expires: until.length ? until[0] : null });
+    }
+  }
   return { codes, problems };
 }
 
@@ -136,7 +151,10 @@ async function main() {
   for (const entry of posts) {
     const moment = entry.moment || entry;
     if (!moment?.is_official || moment?.author?.app?.id !== OFFICIAL_APP_ID) continue;
-    const detail = await getJson(DETAIL, { id: moment.id_str });
+    let detail;
+    // 某一篇打不开（删了、维护中）就记下来跳过，不耽误其他帖子
+    try { detail = await getJson(DETAIL, { id: moment.id_str }); }
+    catch (error) { problems.push(`帖子读不了：${moment.id_str}（${error.message}）`); continue; }
     const title = detail?.data?.moment?.topic?.title || moment?.topic?.title || '';
     const text = textOf(detail?.data?.first_post?.contents);
     if (!mentionsPet(`${title}\n${text}`)) continue;

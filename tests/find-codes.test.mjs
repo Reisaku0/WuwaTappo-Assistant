@@ -30,15 +30,40 @@ test('同一帖里游戏本体的码不收，只收桌宠的码', () => {
   assert.deepEqual(extractCodes(text, '鸣潮新版本前瞻').codes, [{ code: 'PetOnly', expires: '2027-01-05T11:00:00+08:00' }]);
 });
 
-test('每个码用自己那一段的有效期', () => {
+test('桌宠的码在前、游戏本体的码在后，也按小标题分清', () => {
+  const text = textOf([para('【Wuwa Tappo 福利】'), para('兑换码：PetOnly'), para('【游戏本体福利】'), para('兑换码：GameOnly')]);
+  assert.deepEqual(extractCodes(text, '福利汇总').codes, [{ code: 'PetOnly', expires: null }]);
+});
+
+test('每个码用自己那一段的有效期；有效期写在码前面也一样', () => {
   const text = textOf([
-    para('Wuwa Tappo 兑换码：AAA111'), para('有效期至2026年11月28日 11:00'),
-    para('Wuwa Tappo 兑换码：BBB222'), para('有效期至2026年12月31日 11:00'),
+    para('【桌宠活动一】'), para('有效期至2026年12月31日 11:00'), para('Wuwa Tappo 兑换码：AAA111'),
+    para('【桌宠活动二】'), para('有效期至2026年11月28日 11:00'), para('Wuwa Tappo 兑换码：BBB222'),
   ]);
   assert.deepEqual(extractCodes(text, TITLE).codes, [
-    { code: 'AAA111', expires: '2026-11-28T11:00:00+08:00' },
-    { code: 'BBB222', expires: '2026-12-31T11:00:00+08:00' },
+    { code: 'AAA111', expires: '2026-12-31T11:00:00+08:00' },
+    { code: 'BBB222', expires: '2026-11-28T11:00:00+08:00' },
   ]);
+});
+
+test('一段里有多个码和多条有效期、看不出对应关系时，先不收', () => {
+  const result = extractCodes(textOf([
+    para('Wuwa Tappo 兑换码：AAA111'), para('有效期至2026年11月28日 11:00'),
+    para('Wuwa Tappo 兑换码：BBB222'), para('有效期至2026年12月31日 11:00'),
+  ]), TITLE);
+  assert.deepEqual(result.codes, []);
+  assert.equal(result.problems.length, 2);
+});
+
+test('只写在标题里的码也收', () => {
+  const result = extractCodes(textOf([para('兑换有效期：至2027年1月5日 11:00')]), 'Wuwa Tappo 福利，兑换码：PetOnly');
+  assert.deepEqual(result.codes, [{ code: 'PetOnly', expires: '2027-01-05T11:00:00+08:00' }]);
+});
+
+test('「可兑换至11月26日」这种没写年份的，先不收', () => {
+  const result = extractCodes(textOf([para('Wuwa Tappo 兑换码：Short1'), para('可兑换至11月26日 11:00')]), TITLE);
+  assert.deepEqual(result.codes, []);
+  assert.equal(result.problems.length, 1);
 });
 
 test('有效期的常见写法都认得；写了但读不懂的先不收', () => {
