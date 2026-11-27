@@ -123,10 +123,15 @@ async function getJson(url, params) {
 async function main() {
   const file = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'redeem-codes.json');
   const list = JSON.parse(fs.readFileSync(file, 'utf8'));
-  const feed = await getJson(FEED, { group_id: GROUP_ID, type: 'official', limit: 20 });
-  if (!Array.isArray(feed?.data?.list)) throw new Error('TapTap 返回的帖子列表格式变了');
+  // TapTap 一页最多 10 篇：读最近两页，20 篇官方帖子
+  const posts = [];
+  for (const from of [0, 10]) {
+    const feed = await getJson(FEED, { group_id: GROUP_ID, type: 'official', limit: 10, from });
+    if (!Array.isArray(feed?.data?.list)) throw new Error('TapTap 返回的帖子列表格式变了');
+    posts.push(...feed.data.list);
+  }
   const found = [], problems = [];
-  for (const entry of feed.data.list) {
+  for (const entry of posts) {
     const moment = entry.moment || entry;
     if (!moment?.is_official || moment?.author?.app?.id !== OFFICIAL_APP_ID) continue;
     const detail = await getJson(DETAIL, { id: moment.id_str });
